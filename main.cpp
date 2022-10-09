@@ -62,6 +62,14 @@ typedef enum{
     DERIVA=2,
     COMPROBAR=3,
 } _eGame1State;
+
+typedef enum{
+    FALLING,
+    RISING,
+    UP,
+    DOWN,
+} _eButtonState;
+
 DigitalOut LED(PC_13);
 RawSerial Pc(PA_9,PA_10);
 DigitalIn Pulsador(PA_4);
@@ -88,6 +96,8 @@ AnalogIn irDr(PA_2);
 
 Timer myTimer;
 IRSen Irval;
+_eButtonState BUTTON=UP;
+_eGameSelect GAME=IDLE;
 _work w;
 _work1 w1;
 volatile uint8_t rxData[256],RindexW,RindexR; //tdo lo que se usa como interrupcion deberia ser volatile ,este es el buffer
@@ -97,14 +107,13 @@ int8_t angaux=0;
 bool Servomov=false,echo=false,measuring=false,PanOn=false;
 //contadores
 int32_t timeS=0,timeSEN=0;
-uint32_t counter2=0,timeaux=0,delay=0,counter3=0,counterSERV=0,counterSearch=0,counterPulsador=0;
+uint32_t counter2=0,timeaux=0,delay=0,counter3=0,counterSERV=0,counterSearch=0,counterPulsador=0,counterCambioJuego=0;
 //VARIABLES MOTORES
 int16_t VelM1=0,VelM2=0;
 int8_t SentidoM1=0,SentidoM2=0;
 
 int main(){
 
-    _eGameSelect GAME=IDLE;
     myTimer.start();
     TindexR=0;
     TindexW=0;
@@ -144,26 +153,47 @@ int main(){
 
     servo.pulsewidth_us(1450);
 
-    // delay = myTimer.read_us();
-    // for(int i=0;i<10;i++){
-    //     Leds.write(0);
-    //     wait_ms(50);
-    //     Leds.write(15);
-    //     wait_ms(50);
-    // }
-
     hecho.rise(&distanceInitMeasurement);
     hecho.fall(&distanceMeasurement);
+
+    uint8_t GameHeartbeat=0;
 
     while(1){
         
         HeartBeat();
 
-        if((myTimer.read_ms()-counterPulsador)>40){
-            counterPulsador=myTimer.read_ms();
-            pulsador();
-        }
+        // if((myTimer.read_ms()-counterPulsador)>40){
+        //     counterPulsador=myTimer.read_ms();
+        //     pulsador();
+        // }
 
+        // if(BUTTON == DOWN ){
+
+        //     if((myTimer.read_ms()-counterCambioJuego)>1000 && (myTimer.read_ms()-counterCambioJuego)<5000){
+
+        //         counterCambioJuego=myTimer.read_ms();
+
+        //         GameHeartbeat++;
+
+        //         if(GameHeartbeat>4)
+        //             GameHeartbeat=0;
+
+        //         switch (GameHeartbeat){
+        //             case 0:
+        //                 GAME=IDLE;
+        //             break;
+        //             case 1:
+        //                 GAME=SIGUEMANO;
+        //             break;
+        //             case 2:
+        //                 GAME=IDLE;
+        //             break;
+        //             case 3:
+        //                 GAME=IDLE;
+        //             break;
+        //         }
+        //     }
+        // }
         //Si los indices son diferentes, Decodifico lo que llego por el puerto Serie
         if(RindexR!=RindexW)
             DecodeHeader(RindexW);
@@ -180,22 +210,24 @@ int main(){
     //    SENSORIR();
         TimingDistance();
 
-        switch(GAME){
-            
-            case IDLE:
-            break;
-            case SIGUEMANO:
-                SigueMano();
-            break;
-            case SIGUELINEA:
-            break;
-            case LABERINTO:
-            break;
-            
-        }
 
-        if(PanOn)
-            Paning();
+        SigueMano();
+        // switch(GAME){
+            
+        //     case IDLE:
+        //     break;
+        //     case SIGUEMANO:
+        //         SigueMano();
+        //     break;
+        //     case SIGUELINEA:
+        //     break;
+        //     case LABERINTO:
+        //     break;
+            
+        // }
+
+        // if(PanOn)
+        //     Paning();
     }
 }
 
@@ -211,14 +243,34 @@ void ServOnMove(){
 
 void HeartBeat(){
 
-    static uint8_t move=0,mask=21;
+    static uint8_t move=0;
     static uint32_t counter=0;
+    uint8_t mask=21;
+    uint32_t comp=31; //comp para comparar en bitwise
+    
 
+    switch (GAME){
+        case IDLE:
+            mask=5;
+            comp=0x0F;
+        break;
+        case SIGUEMANO:
+            // mask=0x5F;      //0101 1111
+            // comp=0x7FFFFFFF; //30 1 (un monton de 1)
+            mask=1;
+            comp=0x01;
+        break;
+        case SIGUELINEA:
+        break;
+        case LABERINTO:
+        break;
+
+    }
     if((myTimer.read_ms()-counter)>100){
         counter=myTimer.read_ms();
         LED.write( (~mask) & (1<<move));
         move++;
-        move&=31;
+        move&=comp;
     }
 }
 
@@ -336,7 +388,7 @@ void decodeData(uint8_t index){
     case PULSADORES:
        
         bufAux[indiceAux++]=PULSADORES;
-        bufAux[indiceAux++]=Pulsadores.read();
+        bufAux[indiceAux++]=Pulsador.read();
         bufAux[NBYTES]=0x03; 
       
         break;
@@ -586,7 +638,7 @@ void Motores(int16_t VelM1,int8_t SentidoM1,int16_t VelM2,int8_t SentidoM2){ //s
 void SigueMano(){
 
     static _eGame1State STATE;
-    static int8_t AngSearch=-90;
+    static int8_t AngSearch = -90;
     uint8_t Distance;
 
     Distance=timeS/58;
@@ -595,49 +647,44 @@ void SigueMano(){
 
         case MOVING:
 
-            if((myTimer.read_ms()-counterSearch)>200){
-
-                counterSearch=myTimer.read_ms();
-
-                if((Distance)<11 && (Distance)>9) //si esta entre 9 y 11 el auto frena
-                    Motores(0,0,0,0);
-                else
-                if((timeS/58)<20 && (Distance)>11)
-                    Motores(40,1,40,1);
-                else
-                if((Distance)<40 && (Distance)>20)
-                    Motores(100,1,100,1);
-                else
-                if((Distance)<9)
-                    Motores(100,0,100,0);
-
-                if((Distance)>40){
-                    Motores(0,0,0,0);
-                    STATE=SEARCHING;
-                }
+            if((Distance)<11 && (Distance)>9) //si esta entre 9 y 11 el auto frena
+                Motores(0,0,0,0);
+            else
+            if((Distance)<4)
+                Motores(0,0,0,0);
+            else
+            if((Distance)<20 && (Distance)>11)
+                Motores(40,0,40,0);
+            else
+            if((Distance)<40 && (Distance)>20)
+                Motores(100,0,100,0);
+            else
+            if((Distance)<9)
+                Motores(100,1,100,1);
+            else
+            if((Distance)<15 && (Distance)>9)
+                Motores(40,1,40,1);
+            if((Distance)>40){
+                Motores(0,0,0,0);
             }
+            
         break;
     
         case SEARCHING:
+
+            MoverServo(AngSearch);
 
             if((myTimer.read_ms()-counterSearch)>250){ //tiempo en ubicar el servo y medir la distancia 
                 
                 counterSearch=myTimer.read_ms();
             
-                MoverServo(AngSearch);
                 AngSearch+=10;
 
-                if((myTimer.read_ms()-counterSERV)>20){
-
-                    counterSERV=myTimer.read_ms();
-
-                    if((Distance)<40){
-                        MoverServo(0);
-                        STATE=DERIVA;
-                        AngSearch=-90;
-                    }
-                }else
-                    AngSearch-=20;
+                if((Distance)<40){
+                    MoverServo(0);
+                    STATE=DERIVA;
+                    AngSearch=-90;
+                }
             }
             
         break;
@@ -649,7 +696,6 @@ void SigueMano(){
                 Motores(40,0,40,1);
 
             STATE=COMPROBAR;
-
             counterSearch=myTimer.read_ms();
 
         break;
@@ -663,16 +709,42 @@ void SigueMano(){
                     STATE=MOVING;
                 else    
                     STATE=SEARCHING;
-
             }
         break;
-
     }
 }
+
 void pulsador(){
 
-    pulsador.read();
+    bool BUT;
+    BUT = Pulsador.read();    
     
+    switch (BUTTON){
+        case UP:
+            if(BUT)  //boton presionado == 0
+                BUTTON = FALLING;
+        break;
+
+        case DOWN:
+            if(!BUT)
+                BUTTON = RISING;
+        break;
+
+        case FALLING:
+            if(BUT)
+                BUTTON = DOWN;
+            else   
+                BUTTON = UP;
+        break;
+
+        case RISING:
+            if(!BUT)
+                BUTTON = UP;
+            else    
+                BUTTON = DOWN;
+        break;
+  
+    }
 }
 // void SENSORIR(){
 
